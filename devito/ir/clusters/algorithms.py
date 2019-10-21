@@ -250,11 +250,23 @@ class Enforce(Queue):
                 # Try with increasingly smaller ClusterGroups until the ambiguity is gone
                 return self.callback(clusters[:-1], prefix, backlog, require_break)
 
-        # If the flow- or anti-dependences are not coupled, one or more Clusters
-        # might be scheduled separately, to increase parallelism (this is basically
-        # what low-level compilers call "loop fission")
+        # If there are no parallel Dimensions, we attempt what low-level compilers
+        # call "loop fission" -- which here means scheduling Clusters so that they
+        # end up in different IterationSpaces
         for n, _ in enumerate(clusters):
+            #accesses = scope.a_query(n, 'R')
+            ## Is 
+            #deps = scope.gen_d_from_access(accesses)
+            #if any((d.cause | candidates) > candidates for d in deps()):
+            #
+            #for d in scope.gen_d_from_access(accesses):
+            #    from IPython import embed; embed()
             d_cross = scope.d_from_access(scope.a_query(n, 'R')).cross()
+            if len(d_cross) > 20:
+                # TODO: heuristic: peak at the first deps; if they're carried in
+                # a dimensions that precedes or is equal to those in candidates,
+                # then no need for fission, just move on
+                from IPython import embed; embed()
             if any(d.is_storage_volatile(candidates) for d in d_cross):
                 break
             elif d_cross.cause & candidates:
