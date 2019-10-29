@@ -44,11 +44,11 @@ class InPlaceOperator(Operator):
 
         symbols_in_order = [symbols[1], symbols[2], symbols[0]]
 
-        first_subs = my_expr.subs(symbols_in_order[0].function,in1)
+        first_subs = my_expr.xreplace({symbols_in_order[0]:in1})
 
-        expected_str = "Eq(f1[time + 1, x, y], f1[time, x, y] + in1 + 1)"
+        expected_str = "Eq(f1[time + 1, x, y], in1 + f1[time, x, y] + 1)"
         try:
-            assert first_subs == expected_str 
+            assert str(first_subs) == expected_str 
         except:
             print("Expected: \n %s \nReturned: \n %s" % \
                 (expected_str, first_subs))
