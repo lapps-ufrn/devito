@@ -33,25 +33,69 @@ class InPlaceOperator(Operator):
 
     def _specialize_exprs(self, expressions):
 
-        my_expr = expressions[0]
+        expr_in = expressions[0]
+        exprs_out = []
 
         from sympy import symbols
         in1, in2, out1, out2 = symbols("in1, in2, out1, out2")
 
 
         from devito.symbolics import retrieve_indexed
-        symbols = retrieve_indexed(my_expr)
+        symbols = retrieve_indexed(expr_in)
 
         symbols_in_order = [symbols[1], symbols[2], symbols[0]]
 
-        first_subs = my_expr.xreplace({symbols_in_order[0]:in1})
+        tmp_expr1 = expr_in.xreplace({symbols_in_order[0]:in2})
+        tmp_expr2 = tmp_expr1.xreplace({symbols_in_order[1]:in1})
+        tmp_expr3 = tmp_expr2.xreplace({symbols_in_order[2]:symbols_in_order[0]})
 
-        expected_str = "Eq(f1[time + 1, x, y], in1 + f1[time, x, y] + 1)"
-        try:
-            assert str(first_subs) == expected_str 
-        except:
-            print("Expected: \n %s \nReturned: \n %s" % \
-                (expected_str, first_subs))
+        exprs_out.append(tmp_expr3)
+
+        tmp_expr1 = tmp_expr3.xreplace({symbols_in_order[0]:symbols_in_order[1]})
+        tmp_expr2 = tmp_expr1.xreplace({in1:symbols_in_order[0]})
+        tmp_expr3 = tmp_expr2.xreplace({in2:in1})
+
+        exprs_out.append(tmp_expr3)
+
+        tmp_expr1 = tmp_expr3.xreplace({symbols_in_order[1]:symbols_in_order[2]})
+        tmp_expr2 = tmp_expr1.xreplace({symbols_in_order[0]:symbols_in_order[1]})
+        tmp_expr3 = tmp_expr2.xreplace({in1:symbols_in_order[0]})
+
+        exprs_out.append(tmp_expr3)
+
+        tmp_expr1 = tmp_expr3.xreplace({symbols_in_order[2]:out1})
+        tmp_expr2 = tmp_expr1.xreplace({symbols_in_order[1]:symbols_in_order[2]})
+        tmp_expr3 = tmp_expr2.xreplace({symbols_in_order[0]:symbols_in_order[1]})
+
+        exprs_out.append(tmp_expr3)
+
+        tmp_expr1 = tmp_expr3.xreplace({out1:out2})
+        tmp_expr2 = tmp_expr1.xreplace({symbols_in_order[2]:out1})
+        tmp_expr3 = tmp_expr2.xreplace({symbols_in_order[1]:symbols_in_order[2]})
+
+        exprs_out.append(tmp_expr3)
+
+        print("\nInput expr:\n %s\n\nOutput exprs:" % expr_in)
+        for n, i in enumerate(exprs_out):
+            print(" %s) %s" % (n+1,i))
+
+        # from slack
+        expected_strs = [\
+            "Eq(f1[time - 1, x, y], in1 + in2 + 1)", 
+            "Eq(f1[time, x, y], in1 + f1[time - 1, x, y] + 1)",
+            "Eq(f1[time + 1, x, y], f1[time, x, y] + f1[time - 1, x, y] + 1)",
+            "Eq(out1, f1[time, x, y] + f1[time - 1, x, y] + 1)",
+            "Eq(out2, f1[time, x, y] + out1 + 1)"]
+
+        print ('\n*RESULT*')
+        for n, i in enumerate(exprs_out):
+            print (' %s:' % (n+1), end='')
+            try:
+                assert str(exprs_out[n]) == expected_strs[n]
+                print (' PASS')
+            except:
+                print(" FAIL\n\tExpected:\n\t %s\n\tReturned:\n\t %s" % \
+                    (expected_strs[n], exprs_out[n]))
 
         # from IPython import embed; embed()
         return [LoweredEq(i) for i in expressions]
