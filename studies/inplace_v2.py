@@ -56,8 +56,8 @@ class InPlaceOperator(Operator):
 
         tmp_expr = expr_in
         for i in range(5):        
-            exprs_out.append(tmp_expr.xreplace(mapping[i]))
             tmp_expr = tmp_expr.xreplace(mapping[i])
+            exprs_out.append(tmp_expr)
 
         # exprs_out.append(tmp_expr3)
 
