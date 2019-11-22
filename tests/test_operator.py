@@ -1,10 +1,11 @@
 import numpy as np
 import pytest
 
-from conftest import skipif, EVAL, time, x, y, z
+from conftest import skipif, time, x, y, z
 from devito import (Grid, Eq, Operator, Constant, Function, TimeFunction,
                     SparseFunction, SparseTimeFunction, Dimension, error, SpaceDimension,
-                    NODE, CELL, configuration)
+                    NODE, CELL, dimensions, configuration, TensorFunction,
+                    TensorTimeFunction, VectorFunction, VectorTimeFunction)
 from devito.ir.iet import (Expression, Iteration, FindNodes, IsPerfectIteration,
                            retrieve_iteration_tree)
 from devito.ir.support import Any, Backward, Forward
@@ -382,6 +383,15 @@ class TestArithmetic(object):
         assert np.all(u.data[1:4, 4:6, 4:6] == pytest.approx(0.75))
         assert np.sum(u.data[:]) == pytest.approx(12*0.75)
 
+    @pytest.mark.parametrize('func1', [TensorFunction, TensorTimeFunction,
+                                       VectorFunction, VectorTimeFunction])
+    def test_tensor(self, func1):
+        grid = Grid(tuple([5]*3))
+        f1 = func1(name="f1", grid=grid)
+        op1 = Operator(Eq(f1, f1.dx))
+        op2 = Operator([Eq(f, f.dx) for f in f1.values()])
+        assert str(op1.ccode) == str(op2.ccode)
+
 
 class TestAllocation(object):
 
@@ -406,11 +416,14 @@ class TestAllocation(object):
         """
         Test the "deformed" allocation for staggered functions
         """
-        grid = Grid(shape=tuple([11]*ndim))
+        grid = Grid(shape=tuple([11]*ndim), dimensions=(x, y, z)[:ndim])
         f = Function(name='f', grid=grid, staggered=stagg)
+        assert f.data.shape == tuple([11]*ndim)
+        # Add a non-staggered field to ensure that the auto-derived
+        # dimension size arguments are at maximum
         g = Function(name='g', grid=grid)
         # Test insertion into a central point
-        index = tuple(5 for _ in f.staggered)
+        index = tuple(5 for _ in f.dimensions)
         set_f = Eq(f[index], 2.)
         set_g = Eq(g[index], 3.)
 
@@ -426,11 +439,14 @@ class TestAllocation(object):
         """
         Test the "deformed" allocation for staggered functions
         """
-        grid = Grid(shape=tuple([11]*ndim))
+        grid = Grid(shape=tuple([11]*ndim), dimensions=(x, y, z)[:ndim])
         f = TimeFunction(name='f', grid=grid, staggered=stagg)
+        assert f.data.shape[1:] == tuple([11]*ndim)
+        # Add a non-staggered field to ensure that the auto-derived
+        # dimension size arguments are at maximum
         g = TimeFunction(name='g', grid=grid)
         # Test insertion into a central point
-        index = tuple([0] + [5 for _ in f.staggered[1:]])
+        index = tuple([0] + [5 for _ in f.dimensions[1:]])
         set_f = Eq(f[index], 2.)
         set_g = Eq(g[index], 3.)
 
@@ -950,8 +966,13 @@ class TestArguments(object):
 
 class TestDeclarator(object):
 
-    def test_heap_1D_stencil(self, a, b):
-        operator = Operator(Eq(a, a + b + 5.), dse='noop', dle=None)
+    def test_heap_1D_stencil(self):
+        i, j = dimensions('i j')
+        a = Array(name='a', dimensions=(i,))
+        b = Array(name='b', dimensions=(i,))
+        f = Function(name='f', shape=(3,), dimensions=(j,))
+        operator = Operator([Eq(a[i], a[i] + b[i] + 5.), Eq(f[j], a[j])],
+                            dse='noop', dle=None)
         assert """\
   float (*a);
   posix_memalign((void**)&a, 64, sizeof(float[i_size]));
@@ -965,12 +986,18 @@ class TestDeclarator(object):
   /* End section0 */
   gettimeofday(&end_section0, NULL);
   timers->section0 += (double)(end_section0.tv_sec-start_section0.tv_sec)\
-+(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;
-  free(a);
-  return 0;""" in str(operator.ccode)
++(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;""" in str(operator)
+        assert "free(a);" in str(operator)
 
-    def test_heap_perfect_2D_stencil(self, a, c):
-        operator = Operator([Eq(a, c), Eq(c, c*a)], dse='noop', dle=None)
+    def test_heap_perfect_2D_stencil(self):
+        i, j, k = dimensions('i j k')
+        a = Array(name='a', dimensions=(i,))
+        c = Array(name='c', dimensions=(i, j))
+        f = Function(name='f', shape=(3, 3), dimensions=(j, k))
+        operator = Operator([Eq(a[i], c[i, j]),
+                             Eq(c[i, j], c[i, j]*a[i]),
+                             Eq(f[j, k], a[j] + c[j, k])],
+                            dse='noop', dle=None)
         assert """\
   float (*a);
   float (*c)[j_size];
@@ -990,13 +1017,21 @@ class TestDeclarator(object):
   /* End section0 */
   gettimeofday(&end_section0, NULL);
   timers->section0 += (double)(end_section0.tv_sec-start_section0.tv_sec)\
-+(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;
++(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;""" in str(operator)
+        assert """\
   free(a);
   free(c);
-  return 0;""" in str(operator.ccode)
+  return 0;""" in str(operator)
 
-    def test_heap_imperfect_2D_stencil(self, a, c):
-        operator = Operator([Eq(a, 0.), Eq(c, c*a)], dse='noop', dle=None)
+    def test_heap_imperfect_2D_stencil(self):
+        i, j, k = dimensions('i j k')
+        a = Array(name='a', dimensions=(i,))
+        c = Array(name='c', dimensions=(i, j))
+        f = Function(name='f', shape=(3, 3), dimensions=(j, k))
+        operator = Operator([Eq(a[i], 0),
+                             Eq(c[i, j], c[i, j]*a[i]),
+                             Eq(f[j, k], a[j] + c[j, k])],
+                            dse='noop', dle=None)
         assert """\
   float (*a);
   float (*c)[j_size];
@@ -1007,7 +1042,7 @@ class TestDeclarator(object):
   /* Begin section0 */
   for (int i = i_m; i <= i_M; i += 1)
   {
-    a[i] = 0.0F;
+    a[i] = 0;
     for (int j = j_m; j <= j_M; j += 1)
     {
       c[i][j] = a[i]*c[i][j];
@@ -1016,13 +1051,19 @@ class TestDeclarator(object):
   /* End section0 */
   gettimeofday(&end_section0, NULL);
   timers->section0 += (double)(end_section0.tv_sec-start_section0.tv_sec)\
-+(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;
++(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;""" in str(operator)
+        assert """\
   free(a);
   free(c);
-  return 0;""" in str(operator.ccode)
+  return 0;""" in str(operator)
 
-    def test_stack_scalar_temporaries(self, a, t0, t1):
-        operator = Operator([Eq(t0, 1.), Eq(t1, 2.), Eq(a, t0*t1*3.)],
+    def test_stack_scalar_temporaries(self):
+        i, j = dimensions('i j')
+        a = Array(name='a', dimensions=(i,))
+        f = Function(name='f', shape=(3,), dimensions=(j,))
+        t0 = Scalar(name='t0')
+        t1 = Scalar(name='t1')
+        operator = Operator([Eq(t0, 1.), Eq(t1, 2.), Eq(a[i], t0*t1*3.), Eq(f, a[j])],
                             dse='noop', dle=None)
         assert """\
   float (*a);
@@ -1039,14 +1080,20 @@ class TestDeclarator(object):
   /* End section0 */
   gettimeofday(&end_section0, NULL);
   timers->section0 += (double)(end_section0.tv_sec-start_section0.tv_sec)\
-+(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;
-  free(a);
-  return 0;""" in str(operator.ccode)
-
-    def test_stack_vector_temporaries(self, c_stack, e):
-        operator = Operator([Eq(c_stack, e*1.)], dse='noop', dle=None)
++(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;""" in str(operator)
         assert """\
-  float c_stack[i_size][j_size] __attribute__((aligned(64)));
+  free(a);
+  return 0;""" in str(operator)
+
+    def test_stack_vector_temporaries(self):
+        i, j, k, s, q = dimensions('i j k s q')
+        c = Array(name='c', dimensions=(i, j), scope='stack')
+        e = Array(name='e', dimensions=(k, s, q, i, j))
+        f = Function(name='f', shape=(3, 3), dimensions=(s, q))
+        operator = Operator([Eq(c[i, j], e[k, s, q, i, j]*1.), Eq(f, c[s, q])],
+                            dse='noop', dle=None)
+        assert """\
+  float c[i_size][j_size] __attribute__((aligned(64)));
   struct timeval start_section0, end_section0;
   gettimeofday(&start_section0, NULL);
   /* Begin section0 */
@@ -1060,7 +1107,7 @@ class TestDeclarator(object):
         {
           for (int j = j_m; j <= j_M; j += 1)
           {
-            c_stack[i][j] = 1.0F*e[k][s][q][i][j];
+            c[i][j] = 1.0F*e[k][s][q][i][j];
           }
         }
       }
@@ -1069,8 +1116,7 @@ class TestDeclarator(object):
   /* End section0 */
   gettimeofday(&end_section0, NULL);
   timers->section0 += (double)(end_section0.tv_sec-start_section0.tv_sec)\
-+(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;
-  return 0;""" in str(operator.ccode)
++(double)(end_section0.tv_usec-start_section0.tv_usec)/1000000;""" in str(operator)
 
 
 class TestLoopScheduling(object):
@@ -1106,7 +1152,7 @@ class TestLoopScheduling(object):
          'Eq(ti1[x+4,y+5,z+3], ti3[x+1,y-4,z+1])',
          'Eq(ti3[x+7,y,z+2], ti3[x+5,y,z-1] - ti0[x-3,y-2,z-4])')
     ])
-    def test_consistency_coupled_w_ofs(self, exprs, ti0, ti1, ti3):
+    def test_consistency_coupled_w_ofs(self, exprs):
         """
         Test that no matter what is the order in which the equations are
         provided to an Operator, the resulting loop nest is the same.
@@ -1114,7 +1160,18 @@ class TestLoopScheduling(object):
         these impact the loop bounds, but not the resulting tree
         structure.
         """
-        eq1, eq2, eq3 = EVAL(exprs, ti0.base, ti1.base, ti3.base)
+        grid = Grid(shape=(4, 4, 4))
+        x, y, z = grid.dimensions  # noqa
+
+        ti0 = Function(name='ti0', grid=grid)  # noqa
+        ti1 = Function(name='ti1', grid=grid)  # noqa
+        ti3 = Function(name='ti3', grid=grid)  # noqa
+
+        # List comprehension would need explicit locals/globals mappings to eval
+        eq1 = eval(exprs[0])
+        eq2 = eval(exprs[1])
+        eq3 = eval(exprs[2])
+
         op1 = Operator([eq1, eq2, eq3], dse='noop', dle='noop')
         op2 = Operator([eq2, eq1, eq3], dse='noop', dle='noop')
         op3 = Operator([eq3, eq2, eq1], dse='noop', dle='noop')
@@ -1376,13 +1433,21 @@ class TestLoopScheduling(object):
         ['Eq(ti0[x,y,z], ti0[x,y,z] + t0*2.)', 'Eq(ti0[0,y,0], 0.)'],
         ['Eq(ti0[x,y,z], ti0[x,y,z] + t0*2.)', 'Eq(ti0[0,y,z], 0.)'],
     ])
-    def test_directly_indexed_expression(self, fa, ti0, t0, exprs):
+    def test_directly_indexed_expression(self, ti0, t0, exprs):
         """
         Test that equations using integer indices are inserted in the right
         loop nest, at the right loop nest depth.
         """
-        eqs = EVAL(exprs, ti0.base, t0)
+        grid = Grid(shape=(4, 4, 4))
+        x, y, z = grid.dimensions  # noqa
+
+        ti0 = Function(name='ti0', grid=grid, space_order=0)  # noqa
+        f0 = Scalar(name='t0')  # noqa
+
+        eqs = [eval(exprs[0]), eval(exprs[1])]
+
         op = Operator(eqs, dse='noop', dle='noop')
+
         trees = retrieve_iteration_tree(op)
         assert len(trees) == 2
         assert trees[0][-1].nodes[0].exprs[0].expr.rhs == eqs[0].rhs

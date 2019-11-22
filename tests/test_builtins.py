@@ -1,6 +1,7 @@
 import pytest
 import numpy as np
 from scipy.ndimage import gaussian_filter
+from scipy import misc
 
 from conftest import skipif
 from devito import Grid, Function
@@ -104,14 +105,50 @@ class TestGaussianSmooth(object):
     """
     Class for testing the Gaussian smooth builtin
     """
-    def test_gs_serial(self):
-        """Test in serial."""
+    @pytest.mark.parametrize('sigma', [1, 2, 3, 4, 5])
+    def test_gs_1d_int(self, sigma):
+        """Test the Gaussian smoother in 1d."""
 
-        a = np.arange(50, step=2).reshape((5, 5))
-        sp_smoothed = gaussian_filter(a, sigma=1)
-        dv_smoothed = gaussian_smooth(a, sigma=1)
+        a = np.arange(970, step=5)
+        sp_smoothed = gaussian_filter(a, sigma=sigma)
+        dv_smoothed = gaussian_smooth(a, sigma=sigma)
 
-        assert np.all(sp_smoothed - np.array(dv_smoothed) == 0)
+        assert np.amax(np.abs(sp_smoothed - np.array(dv_smoothed))) <= 1
+
+    @pytest.mark.parametrize('sigma', [1, 2])
+    def test_gs_1d_float(self, sigma):
+        """Test the Gaussian smoother in 1d on array of float."""
+
+        a = np.array([1.2, 2.7, 3.9, 4.1, 5.2, 6.5, 7.1, 9.3, 11.0])
+        sp_smoothed = gaussian_filter(a, sigma=sigma)
+        dv_smoothed = gaussian_smooth(a, sigma=sigma)
+
+        assert np.amax(np.abs(sp_smoothed - np.array(dv_smoothed))) <= 1e-5
+
+    @pytest.mark.parametrize('sigma', [(1, 1), 2, (1, 3), (5, 5)])
+    def test_gs_2d_int(self, sigma):
+        """Test the Gaussian smoother in 2d."""
+
+        a = misc.ascent()
+        sp_smoothed = gaussian_filter(a, sigma=sigma)
+        dv_smoothed = gaussian_smooth(a, sigma=sigma)
+
+        try:
+            s = max(sigma)
+        except TypeError:
+            s = sigma
+        assert np.amax(np.abs(sp_smoothed - np.array(dv_smoothed))) <= s
+
+    @pytest.mark.parametrize('sigma', [(1, 1), 2, (1, 3), (5, 5)])
+    def test_gs_2d_float(self, sigma):
+        """Test the Gaussian smoother in 2d."""
+
+        a = misc.ascent()
+        a = a+0.1
+        sp_smoothed = gaussian_filter(a, sigma=sigma)
+        dv_smoothed = gaussian_smooth(a, sigma=sigma)
+
+        assert np.amax(np.abs(sp_smoothed - np.array(dv_smoothed))) <= 1e-5
 
     @skipif('nompi')
     @pytest.mark.parallel(mode=4)
@@ -152,6 +189,15 @@ class TestInitializeFunction(object):
         assert np.all(a[:, ::-1] - np.array(f.data[4:8, 8:12]) == 0)
         assert np.all(a[::-1, :] - np.array(f.data[0:4, 4:8]) == 0)
         assert np.all(a[::-1, :] - np.array(f.data[8:12, 4:8]) == 0)
+
+    def test_nbl_zero(self):
+        """Test for nbl = 0."""
+        a = np.arange(16).reshape((4, 4))
+        grid = Grid(shape=(4, 4))
+        f = Function(name='f', grid=grid, dtype=np.int32)
+        initialize_function(f, a, 0)
+
+        assert np.all(a[:] - np.array(f.data[:]) == 0)
 
     @skipif('nompi')
     @pytest.mark.parallel(mode=4)
