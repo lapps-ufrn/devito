@@ -141,6 +141,8 @@ class CUDADeviceCompiler(CompilerOPS):
 
         include_dirs = '%s %s/c/include' % (self.get_jit_dir(), self._ops_install_path)
         self.include_dirs = include_dirs.split(' ')
+        self._cuda_install_path = os.environ.get('CUDA_INSTALL_PATH')
+        self.include_dirs.append(os.path.join(self._cuda_install_path, 'include'))
 
     def __lookup_cmds__(self):
         self.CC = os.environ.get('CC', 'nvcc')

@@ -5,7 +5,7 @@ import cgen as c
 from devito.ir.iet import (ArrayCast, Expression, Increment, LocalExpression, Element,
                            Iteration, List, Conditional, Section, HaloSpot,
                            ExpressionBundle, Transformer, FindNodes, FindSymbols,
-                           MapExprStmts, XSubs, iet_analyze)
+                           MapExprStmts, XSubs, iet_analyze, filter_iterations)
 from devito.symbolics import IntDiv, ccode, xreplace_indices
 from devito.tools import as_mapper, as_tuple, flatten
 from devito.types import ConditionalDimension
